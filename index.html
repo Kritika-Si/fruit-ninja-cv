@@ -1,0 +1,1145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Fruit Ninja CV - Ultimate Edition</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- MediaPipe CDN scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+    body {
+      background: #0a0a10;
+      color: #fff;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      width: 100vw;
+    }
+    #game-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      max-width: 1280px;
+      max-height: 720px;
+      box-shadow: 0 0 60px rgba(0, 0, 0, 0.95);
+      background: #000;
+      overflow: hidden;
+    }
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+    #webcam {
+      display: none;
+    }
+
+    /* Top Control Bar */
+    #top-bar {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: rgba(15, 15, 22, 0.88);
+      backdrop-filter: blur(10px);
+      padding: 6px 18px;
+      border-radius: 30px;
+      border: 1px solid rgba(255, 152, 0, 0.35);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .ctrl-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #ff9800;
+    }
+    select, .btn-ctrl {
+      background: #202028;
+      color: #fff;
+      border: 1px solid #444;
+      padding: 5px 12px;
+      border-radius: 18px;
+      font-size: 12px;
+      cursor: pointer;
+      outline: none;
+      transition: all 0.2s;
+    }
+    select:focus, .btn-ctrl:hover {
+      border-color: #ff9800;
+      background: #2a2a35;
+    }
+    .btn-ctrl.active {
+      background: #ff9800;
+      color: #000;
+      border-color: #ff9800;
+      font-weight: bold;
+    }
+
+    #loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(8, 8, 12, 0.92);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+      transition: opacity 0.4s ease;
+    }
+    .spinner {
+      width: 60px;
+      height: 60px;
+      border: 5px solid rgba(255, 255, 255, 0.15);
+      border-top-color: #ff9800;
+      border-radius: 50%;
+      animation: spin 1s infinite linear;
+      margin-bottom: 20px;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container">
+    <video id="webcam" playsinline></video>
+    <canvas id="gameCanvas" width="1280" height="720"></canvas>
+    
+    <!-- Top Interactive Bar -->
+    <div id="top-bar">
+      <!-- Camera Selector -->
+      <div class="ctrl-group">
+        <label for="camera-select">📷</label>
+        <select id="camera-select" style="max-width: 170px;"></select>
+        <button id="btn-switch-cam" class="btn-ctrl" title="Switch Camera">Switch</button>
+      </div>
+
+      <!-- Blade Skin Selector -->
+      <div class="ctrl-group">
+        <label for="blade-select">⚔️ Blade:</label>
+        <select id="blade-select">
+          <option value="fire">🔥 Fire Blade</option>
+          <option value="cyan" selected>⚡ Cyber Neon</option>
+          <option value="rainbow">🌈 Rainbow</option>
+          <option value="frost">❄️ Frost Ice</option>
+        </select>
+      </div>
+
+      <!-- Mode Selector -->
+      <div class="ctrl-group">
+        <button id="btn-mode-classic" class="btn-ctrl active">Classic</button>
+        <button id="btn-mode-arcade" class="btn-ctrl">Arcade (60s)</button>
+      </div>
+    </div>
+
+    <!-- Loading Screen -->
+    <div id="loading-overlay">
+      <div class="spinner"></div>
+      <h2 style="font-size: 28px; color: #ff9800; margin-bottom: 10px;">Fruit Ninja CV - Ultimate</h2>
+      <p style="color: #ccc; font-size: 15px;">Initializing Laptop Camera & Dual-Hand AI...</p>
+      <p style="color: #888; font-size: 13px; margin-top: 15px;">Use both hands for dual-blade slicing!</p>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const video = document.getElementById('webcam');
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const cameraSelect = document.getElementById('camera-select');
+    const btnSwitchCam = document.getElementById('btn-switch-cam');
+    const bladeSelect = document.getElementById('blade-select');
+    const btnModeClassic = document.getElementById('btn-mode-classic');
+    const btnModeArcade = document.getElementById('btn-mode-arcade');
+
+    const W = canvas.width;
+    const H = canvas.height;
+
+    // Web Audio Synthesizer
+    const AudioEngine = {
+      ctx: null,
+      init() {
+        if (!this.ctx) {
+          this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+      },
+      slice() {
+        if (!this.ctx) this.init();
+        const c = this.ctx;
+        const now = c.currentTime;
+        const osc = c.createOscillator();
+        const gain = c.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(1050, now);
+        osc.frequency.exponentialRampToValueAtTime(160, now + 0.13);
+        gain.gain.setValueAtTime(0.4, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
+        osc.connect(gain);
+        gain.connect(c.destination);
+        osc.start(now);
+        osc.stop(now + 0.14);
+      },
+      splat() {
+        if (!this.ctx) this.init();
+        const c = this.ctx;
+        const now = c.currentTime;
+        const osc = c.createOscillator();
+        const gain = c.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(320, now);
+        osc.frequency.exponentialRampToValueAtTime(80, now + 0.12);
+        gain.gain.setValueAtTime(0.35, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+        osc.connect(gain);
+        gain.connect(c.destination);
+        osc.start(now);
+        osc.stop(now + 0.13);
+      },
+      freeze() {
+        if (!this.ctx) this.init();
+        const c = this.ctx;
+        const now = c.currentTime;
+        const osc = c.createOscillator();
+        const gain = c.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(400, now);
+        osc.frequency.linearRampToValueAtTime(1200, now + 0.35);
+        gain.gain.setValueAtTime(0.4, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+        osc.connect(gain);
+        gain.connect(c.destination);
+        osc.start(now);
+        osc.stop(now + 0.42);
+      },
+      frenzy() {
+        if (!this.ctx) this.init();
+        const c = this.ctx;
+        const now = c.currentTime;
+        [440, 554, 659, 880].forEach((f, i) => {
+          const osc = c.createOscillator();
+          const gain = c.createGain();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(f, now + i * 0.05);
+          gain.gain.setValueAtTime(0.3, now + i * 0.05);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.05 + 0.2);
+          osc.connect(gain);
+          gain.connect(c.destination);
+          osc.start(now + i * 0.05);
+          osc.stop(now + i * 0.05 + 0.22);
+        });
+      },
+      critical() {
+        if (!this.ctx) this.init();
+        const c = this.ctx;
+        const now = c.currentTime;
+        const osc = c.createOscillator();
+        const gain = c.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(880, now);
+        osc.frequency.exponentialRampToValueAtTime(1760, now + 0.2);
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+        osc.connect(gain);
+        gain.connect(c.destination);
+        osc.start(now);
+        osc.stop(now + 0.25);
+      },
+      bomb() {
+        if (!this.ctx) this.init();
+        const c = this.ctx;
+        const now = c.currentTime;
+        const osc = c.createOscillator();
+        const gain = c.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(130, now);
+        osc.frequency.exponentialRampToValueAtTime(20, now + 0.55);
+        gain.gain.setValueAtTime(0.75, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
+        osc.connect(gain);
+        gain.connect(c.destination);
+        osc.start(now);
+        osc.stop(now + 0.58);
+      },
+      combo() {
+        if (!this.ctx) this.init();
+        const c = this.ctx;
+        const now = c.currentTime;
+        [587, 880].forEach((f, idx) => {
+          const osc = c.createOscillator();
+          const gain = c.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(f, now + idx * 0.05);
+          gain.gain.setValueAtTime(0.3, now + idx * 0.05);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.05 + 0.2);
+          osc.connect(gain);
+          gain.connect(c.destination);
+          osc.start(now + idx * 0.05);
+          osc.stop(now + idx * 0.05 + 0.22);
+        });
+      }
+    };
+
+    // Fruit configurations
+    const FRUIT_CONFIG = {
+      watermelon:     { name: 'Watermelon', radius: 46, outer: '#2e7d32', inner: '#d32f2f', flesh: '#e53935', points: 10, isSpecial: false },
+      orange:         { name: 'Orange',     radius: 40, outer: '#e65100', inner: '#ff9800', flesh: '#ffb74d', points: 10, isSpecial: false },
+      apple:          { name: 'Apple',      radius: 38, outer: '#c62828', inner: '#fff9c4', flesh: '#d32f2f', points: 10, isSpecial: false },
+      banana:         { name: 'Banana',     radius: 36, outer: '#fbc02d', inner: '#fffde7', flesh: '#fdd835', points: 15, isSpecial: false },
+      freeze_banana:  { name: 'Freeze',     radius: 40, outer: '#00e5ff', inner: '#e0f7fa', flesh: '#00b0ff', points: 25, isSpecial: 'freeze' },
+      frenzy_banana:  { name: 'Frenzy',     radius: 40, outer: '#d500f9', inner: '#f3e5f5', flesh: '#aa00ff', points: 25, isSpecial: 'frenzy' },
+      pomegranate:    { name: 'Dragon',     radius: 65, outer: '#880e4f', inner: '#ad1457', flesh: '#f50057', points: 50, isSpecial: 'pome', hp: 12 },
+      bomb:           { name: 'Bomb',       radius: 42, outer: '#212121', inner: '#111111', flesh: '#ff1744', points: 0,  isBomb: true }
+    };
+
+    // Game state
+    let gameMode = 'CLASSIC'; // 'CLASSIC' or 'ARCADE'
+    let selectedBladeSkin = 'cyan';
+    let gameState = 'START';
+    let score = 0;
+    let highScoreClassic = parseInt(localStorage.getItem('fn_high_classic') || '0', 10);
+    let highScoreArcade = parseInt(localStorage.getItem('fn_high_arcade') || '0', 10);
+    let lives = 3;
+    let arcadeTimeLeft = 60;
+    let arcadeTimerInterval = null;
+
+    // Power-up Active Timers
+    let freezeTimer = 0; // in frames
+    let frenzyTimer = 0;
+    let screenFlash = 0;
+
+    let fruits = [];
+    let halves = [];
+    let particles = [];
+    let splats = [];
+    let recentSlices = [];
+    let floatingTexts = [];
+    let lastSpawn = 0;
+    let spawnInterval = 2100;
+
+    // Dual-hand finger trails: hand 0 and hand 1
+    let blades = [
+      { prev: null, trail: [] },
+      { prev: null, trail: [] }
+    ];
+
+    let startFruit = {
+      type: 'watermelon',
+      x: W / 2,
+      y: H / 2 + 30,
+      r: 52,
+      vx: 0,
+      vy: 0,
+      rotation: 0
+    };
+
+    function distanceToSegment(px, py, x1, y1, x2, y2) {
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      if (dx === 0 && dy === 0) return Math.hypot(px - x1, py - y1);
+      let t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy);
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+    }
+
+    function createFruit(forceType = null) {
+      let typeKey = forceType;
+      if (!typeKey) {
+        const roll = Math.random();
+        if (gameMode === 'CLASSIC' && roll < 0.20) {
+          typeKey = 'bomb';
+        } else if (roll < 0.28) {
+          typeKey = 'freeze_banana';
+        } else if (roll < 0.36) {
+          typeKey = 'frenzy_banana';
+        } else if (roll < 0.40) {
+          typeKey = 'pomegranate';
+        } else {
+          const normals = ['watermelon', 'orange', 'apple', 'banana'];
+          typeKey = normals[Math.floor(Math.random() * normals.length)];
+        }
+      }
+
+      const conf = FRUIT_CONFIG[typeKey];
+      const x = W * 0.15 + Math.random() * (W * 0.7);
+      const centerBias = (W / 2 - x) * 0.006;
+      return {
+        type: typeKey,
+        x: x,
+        y: H + conf.radius + 15,
+        r: conf.radius,
+        vx: (Math.random() - 0.5) * 4.2 + centerBias,
+        vy: -(16.5 + Math.random() * 4.2),
+        gravity: 0.44,
+        rotation: Math.random() * Math.PI * 2,
+        vRot: (Math.random() - 0.5) * 0.08,
+        hp: conf.hp || 1,
+        sliced: false,
+        isBomb: conf.isBomb || false,
+        isSpecial: conf.isSpecial || false
+      };
+    }
+
+    function sliceFruit(f, slashAngle, bladePos) {
+      const conf = FRUIT_CONFIG[f.type];
+
+      // Pomegranate / Dragon multi-hit mechanics
+      if (f.isSpecial === 'pome' && f.hp > 1) {
+        f.hp--;
+        AudioEngine.slice();
+        score += 5;
+        f.y -= 6; // pop up slightly on hit
+        f.vx += (Math.random() - 0.5) * 3;
+        for (let i = 0; i < 8; i++) {
+          particles.push(new Particle(f.x, f.y, conf.flesh, 1.2));
+        }
+        floatingTexts.push({ text: `HIT! HP: ${f.hp}`, x: f.x, y: f.y - 40, color: '#f50057', timer: 20 });
+        return;
+      }
+
+      f.sliced = true;
+
+      // Bomb trigger
+      if (f.isBomb) {
+        AudioEngine.bomb();
+        screenFlash = 12;
+        for (let i = 0; i < 75; i++) {
+          particles.push(new Particle(f.x, f.y, Math.random() > 0.5 ? '#ff1744' : '#ff9100', 2.0));
+        }
+        lives = 0;
+        gameOver();
+        return;
+      }
+
+      // Check Critical Slice (10% chance on standard fruits)
+      let pts = conf.points;
+      if (!f.isSpecial && Math.random() < 0.12) {
+        pts += 50;
+        AudioEngine.critical();
+        screenFlash = 5;
+        floatingTexts.push({ text: 'CRITICAL +50!', x: f.x, y: f.y - 45, color: '#ffeb3b', timer: 45 });
+      } else {
+        AudioEngine.slice();
+      }
+
+      // Power-up effects
+      if (f.isSpecial === 'freeze') {
+        freezeTimer = 300; // 5 seconds
+        AudioEngine.freeze();
+        floatingTexts.push({ text: '❄️ FREEZE SLOW-MO!', x: f.x, y: f.y - 40, color: '#00e5ff', timer: 45 });
+      } else if (f.isSpecial === 'frenzy') {
+        frenzyTimer = 240; // 4 seconds
+        AudioEngine.frenzy();
+        floatingTexts.push({ text: '⚡ FRENZY RUSH!', x: f.x, y: f.y - 40, color: '#d500f9', timer: 45 });
+      }
+
+      // Frenzy multiplier
+      if (frenzyTimer > 0) pts *= 2;
+      score += pts;
+
+      updateHighScore();
+
+      // Halves
+      halves.push(new Half(f.x, f.y, f.type, -1, slashAngle));
+      halves.push(new Half(f.x, f.y, f.type, 1, slashAngle));
+      splats.push(new Splat(f.x, f.y, conf.flesh));
+
+      for (let i = 0; i < 28; i++) {
+        particles.push(new Particle(f.x, f.y, conf.flesh, 1.2));
+      }
+    }
+
+    class Half {
+      constructor(x, y, type, side, angle) {
+        this.x = x;
+        this.y = y;
+        this.type = type;
+        this.side = side;
+        this.angle = angle;
+        const perp = angle + Math.PI / 2;
+        const spread = 5 * side;
+        this.vx = Math.cos(perp) * spread + (Math.random() - 0.5) * 2;
+        this.vy = Math.sin(perp) * spread - (2 + Math.random() * 4);
+        this.rot = angle;
+        this.vRot = (0.05 + Math.random() * 0.08) * side;
+        this.gravity = 0.52;
+      }
+      update(spdScale) {
+        this.x += this.vx * spdScale;
+        this.y += this.vy * spdScale;
+        this.vy += this.gravity * spdScale;
+        this.rot += this.vRot * spdScale;
+        return this.y < H + 120;
+      }
+      draw(c) {
+        const conf = FRUIT_CONFIG[this.type];
+        c.save();
+        c.translate(this.x, this.y);
+        c.rotate(this.rot);
+        c.beginPath();
+        if (this.side < 0) {
+          c.arc(0, 0, conf.radius, Math.PI / 2, Math.PI * 1.5);
+        } else {
+          c.arc(0, 0, conf.radius, -Math.PI / 2, Math.PI / 2);
+        }
+        c.closePath();
+        c.fillStyle = conf.outer;
+        c.fill();
+
+        c.beginPath();
+        if (this.side < 0) {
+          c.arc(0, 0, conf.radius * 0.82, Math.PI / 2, Math.PI * 1.5);
+        } else {
+          c.arc(0, 0, conf.radius * 0.82, -Math.PI / 2, Math.PI / 2);
+        }
+        c.closePath();
+        c.fillStyle = conf.inner;
+        c.fill();
+        c.restore();
+      }
+    }
+
+    class Particle {
+      constructor(x, y, color, speedMult = 1.0) {
+        this.x = x;
+        this.y = y;
+        const ang = Math.random() * Math.PI * 2;
+        const spd = (3 + Math.random() * 9) * speedMult;
+        this.vx = Math.cos(ang) * spd;
+        this.vy = Math.sin(ang) * spd - (1 + Math.random() * 3);
+        this.color = color;
+        this.radius = 3 + Math.random() * 4;
+        this.alpha = 1.0;
+        this.decay = 0.02 + Math.random() * 0.03;
+      }
+      update() {
+        this.x += this.vx;
+        this.y += this.vy;
+        this.vy += 0.35;
+        this.alpha -= this.decay;
+        return this.alpha > 0;
+      }
+      draw(c) {
+        c.save();
+        c.globalAlpha = Math.max(0, this.alpha);
+        c.fillStyle = this.color;
+        c.beginPath();
+        c.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        c.fill();
+        c.restore();
+      }
+    }
+
+    class Splat {
+      constructor(x, y, color) {
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.radius = 35 + Math.random() * 20;
+        this.alpha = 0.55;
+      }
+      update() {
+        this.alpha -= 0.007;
+        return this.alpha > 0;
+      }
+      draw(c) {
+        c.save();
+        c.globalAlpha = Math.max(0, this.alpha);
+        c.fillStyle = this.color;
+        c.beginPath();
+        c.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        c.fill();
+        c.restore();
+      }
+    }
+
+    function checkSwipe(p1, p2) {
+      const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+      let cutCount = 0;
+
+      if (gameState === 'START' || gameState === 'GAMEOVER') {
+        const d = distanceToSegment(startFruit.x, startFruit.y, p1.x, p1.y, p2.x, p2.y);
+        if (d <= startFruit.r) {
+          sliceFruit(startFruit, angle, p2);
+          startGame();
+        }
+        return;
+      }
+
+      for (let f of fruits) {
+        if (f.sliced) continue;
+        const d = distanceToSegment(f.x, f.y, p1.x, p1.y, p2.x, p2.y);
+        if (d <= f.r) {
+          sliceFruit(f, angle, p2);
+          cutCount++;
+        }
+      }
+
+      if (cutCount > 0) {
+        const now = Date.now();
+        recentSlices.push(now);
+        recentSlices = recentSlices.filter(t => now - t < 380);
+        if (recentSlices.length >= 2) {
+          const bonus = recentSlices.length * 15;
+          score += bonus;
+          updateHighScore();
+          floatingTexts.push({
+            text: `COMBO x${recentSlices.length}! +${bonus}`,
+            x: p2.x,
+            y: p2.y - 30,
+            color: '#ffeb3b',
+            timer: 45
+          });
+          AudioEngine.combo();
+        }
+      }
+    }
+
+    function startGame() {
+      gameState = 'PLAYING';
+      score = 0;
+      lives = 3;
+      fruits = [];
+      halves = [];
+      particles = [];
+      splats = [];
+      recentSlices = [];
+      floatingTexts = [];
+      freezeTimer = 0;
+      frenzyTimer = 0;
+      lastSpawn = Date.now();
+      AudioEngine.slice();
+
+      if (gameMode === 'ARCADE') {
+        arcadeTimeLeft = 60;
+        if (arcadeTimerInterval) clearInterval(arcadeTimerInterval);
+        arcadeTimerInterval = setInterval(() => {
+          if (gameState === 'PLAYING') {
+            arcadeTimeLeft--;
+            if (arcadeTimeLeft <= 0) {
+              clearInterval(arcadeTimerInterval);
+              gameOver();
+            }
+          }
+        }, 1000);
+      }
+    }
+
+    function gameOver() {
+      gameState = 'GAMEOVER';
+      if (arcadeTimerInterval) clearInterval(arcadeTimerInterval);
+      updateHighScore();
+    }
+
+    function updateHighScore() {
+      if (gameMode === 'CLASSIC') {
+        if (score > highScoreClassic) {
+          highScoreClassic = score;
+          localStorage.setItem('fn_high_classic', highScoreClassic);
+        }
+      } else {
+        if (score > highScoreArcade) {
+          highScoreArcade = score;
+          localStorage.setItem('fn_high_arcade', highScoreArcade);
+        }
+      }
+    }
+
+    // MediaPipe Hand Detection: Dual Hand Tracking (maxNumHands: 2)
+    const hands = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+      maxNumHands: 2,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    hands.onResults((results) => {
+      loadingOverlay.style.opacity = '0';
+      setTimeout(() => loadingOverlay.style.display = 'none', 400);
+
+      const numDetected = results.multiHandLandmarks ? results.multiHandLandmarks.length : 0;
+
+      for (let hIdx = 0; hIdx < 2; hIdx++) {
+        if (hIdx < numDetected) {
+          const tip = results.multiHandLandmarks[hIdx][8]; // Index tip
+          const fx = (1 - tip.x) * W; // Mirror horizontal
+          const fy = tip.y * H;
+          const currentPt = { x: fx, y: fy, time: Date.now() };
+
+          if (blades[hIdx].prev) {
+            checkSwipe(blades[hIdx].prev, currentPt);
+          }
+          blades[hIdx].prev = currentPt;
+          blades[hIdx].trail.push(currentPt);
+        } else {
+          blades[hIdx].prev = null;
+        }
+      }
+    });
+
+    // --- Camera Manager ---
+    let currentStream = null;
+    let videoDevices = [];
+
+    async function setupCamera() {
+      try {
+        const tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        tempStream.getTracks().forEach(t => t.stop());
+
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        videoDevices = devices.filter(d => d.kind === 'videoinput');
+        cameraSelect.innerHTML = '';
+
+        if (videoDevices.length === 0) {
+          alert('No webcam detected!');
+          return;
+        }
+
+        let bestIndex = 0;
+        videoDevices.forEach((dev, idx) => {
+          const opt = document.createElement('option');
+          opt.value = dev.deviceId;
+          const label = dev.label || `Camera ${idx + 1}`;
+          opt.textContent = label;
+          cameraSelect.appendChild(opt);
+
+          const lower = label.toLowerCase();
+          const isPhone = lower.includes('phone') || lower.includes('droid') || lower.includes('iriun') || lower.includes('link to windows') || lower.includes('virtual');
+          const isLaptop = lower.includes('integrated') || lower.includes('internal') || lower.includes('webcam') || lower.includes('laptop') || lower.includes('built-in');
+
+          if (isLaptop) {
+            bestIndex = idx;
+          } else if (!isPhone && bestIndex === 0) {
+            bestIndex = idx;
+          }
+        });
+
+        cameraSelect.selectedIndex = bestIndex;
+        await startCameraStream(videoDevices[bestIndex].deviceId);
+      } catch (err) {
+        console.error('Camera init error:', err);
+      }
+    }
+
+    async function startCameraStream(deviceId) {
+      if (currentStream) {
+        currentStream.getTracks().forEach(t => t.stop());
+      }
+      const constraints = {
+        video: {
+          deviceId: deviceId ? { exact: deviceId } : undefined,
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: 'user'
+        },
+        audio: false
+      };
+      currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = currentStream;
+      await video.play();
+      processVideoFrames();
+    }
+
+    let isProcessing = false;
+    async function processVideoFrames() {
+      if (video.paused || video.ended) return;
+      if (!isProcessing && video.readyState >= 2) {
+        isProcessing = true;
+        await hands.send({ image: video });
+        isProcessing = false;
+      }
+      requestAnimationFrame(processVideoFrames);
+    }
+
+    cameraSelect.addEventListener('change', () => startCameraStream(cameraSelect.value));
+    btnSwitchCam.addEventListener('click', () => {
+      if (videoDevices.length > 1) {
+        let nextIdx = (cameraSelect.selectedIndex + 1) % videoDevices.length;
+        cameraSelect.selectedIndex = nextIdx;
+        startCameraStream(videoDevices[nextIdx].deviceId);
+      }
+    });
+
+    bladeSelect.addEventListener('change', (e) => {
+      selectedBladeSkin = e.target.value;
+    });
+
+    btnModeClassic.addEventListener('click', () => {
+      gameMode = 'CLASSIC';
+      btnModeClassic.classList.add('active');
+      btnModeArcade.classList.remove('active');
+    });
+
+    btnModeArcade.addEventListener('click', () => {
+      gameMode = 'ARCADE';
+      btnModeArcade.classList.add('active');
+      btnModeClassic.classList.remove('active');
+    });
+
+    // --- Main Game Render Loop ---
+    function render() {
+      ctx.clearRect(0, 0, W, H);
+
+      // Camera background
+      if (video.readyState >= 2) {
+        ctx.save();
+        ctx.translate(W, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, 0, 0, W, H);
+        ctx.restore();
+      }
+
+      // Dark Dojo Tint
+      ctx.fillStyle = 'rgba(8, 8, 16, 0.42)';
+      ctx.fillRect(0, 0, W, H);
+
+      // Freeze / Frost Screen Border Overlay
+      if (freezeTimer > 0) {
+        freezeTimer--;
+        const grad = ctx.createRadialGradient(W/2, H/2, W*0.3, W/2, H/2, W*0.7);
+        grad.addColorStop(0, 'rgba(0, 229, 255, 0)');
+        grad.addColorStop(1, 'rgba(0, 229, 255, 0.35)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      // Frenzy Screen Aura
+      if (frenzyTimer > 0) {
+        frenzyTimer--;
+        ctx.fillStyle = 'rgba(213, 0, 249, 0.12)';
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      // Screen Flash (Bomb or Critical)
+      if (screenFlash > 0) {
+        screenFlash--;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      const now = Date.now();
+      const spdScale = freezeTimer > 0 ? 0.35 : 1.0;
+
+      // Clean trail points
+      blades.forEach(b => {
+        b.trail = b.trail.filter(p => now - p.time < 220);
+      });
+
+      // Splats
+      splats = splats.filter(s => {
+        const alive = s.update();
+        if (alive) s.draw(ctx);
+        return alive;
+      });
+
+      // Fruit Spawner & Physics
+      if (gameState === 'PLAYING') {
+        const currentInterval = frenzyTimer > 0 ? 350 : Math.max(1050, 2200 - score * 10);
+        if (now - lastSpawn > currentInterval) {
+          lastSpawn = now;
+          const count = frenzyTimer > 0 ? 2 : (Math.random() > 0.4 ? 2 : 1);
+          for (let i = 0; i < count; i++) {
+            fruits.push(createFruit());
+          }
+        }
+
+        fruits = fruits.filter(f => {
+          f.x += f.vx * spdScale;
+          f.y += f.vy * spdScale;
+          f.vy += f.gravity * spdScale;
+          f.rotation += f.vRot * spdScale;
+
+          if (!f.sliced) {
+            ctx.save();
+            ctx.translate(f.x, f.y);
+            ctx.rotate(f.rotation);
+            const conf = FRUIT_CONFIG[f.type];
+
+            if (f.isBomb) {
+              ctx.beginPath();
+              ctx.arc(0, 0, f.r, 0, Math.PI * 2);
+              ctx.fillStyle = '#1c1c1c';
+              ctx.fill();
+              ctx.strokeStyle = '#d50000';
+              ctx.lineWidth = 3;
+              ctx.stroke();
+              // Fuse
+              ctx.beginPath();
+              ctx.moveTo(0, -f.r);
+              ctx.lineTo(8, -f.r - 14);
+              ctx.strokeStyle = '#ff9800';
+              ctx.lineWidth = 3;
+              ctx.stroke();
+              // Spark
+              ctx.beginPath();
+              ctx.arc(8, -f.r - 14, 4 + Math.random()*3, 0, Math.PI * 2);
+              ctx.fillStyle = '#ffea00';
+              ctx.fill();
+            } else if (f.isSpecial === 'pome') {
+              // Giant Dragon Fruit / Pomegranate
+              ctx.beginPath();
+              ctx.arc(0, 0, f.r, 0, Math.PI * 2);
+              ctx.fillStyle = conf.outer;
+              ctx.fill();
+              ctx.beginPath();
+              ctx.arc(0, 0, f.r * 0.85, 0, Math.PI * 2);
+              ctx.fillStyle = conf.inner;
+              ctx.fill();
+              // Seeds texture
+              for (let a = 0; a < 6; a++) {
+                const ang = a * (Math.PI / 3);
+                ctx.beginPath();
+                ctx.arc(Math.cos(ang)*22, Math.sin(ang)*22, 6, 0, Math.PI * 2);
+                ctx.fillStyle = '#ff4081';
+                ctx.fill();
+              }
+              // HP badge
+              ctx.fillStyle = '#fff';
+              ctx.font = 'bold 16px sans-serif';
+              ctx.fillText(`HP: ${f.hp}`, -22, 5);
+            } else {
+              ctx.beginPath();
+              ctx.arc(0, 0, f.r, 0, Math.PI * 2);
+              ctx.fillStyle = conf.outer;
+              ctx.fill();
+              ctx.beginPath();
+              ctx.arc(0, 0, f.r * 0.85, 0, Math.PI * 2);
+              ctx.fillStyle = conf.inner;
+              ctx.fill();
+
+              // Special banana glows
+              if (f.isSpecial === 'freeze') {
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+              }
+            }
+            ctx.restore();
+          }
+
+          if (f.y > H + 90) {
+            if (!f.sliced && !f.isBomb && gameMode === 'CLASSIC') {
+              lives--;
+              AudioEngine.splat();
+              if (lives <= 0) gameOver();
+            }
+            return false;
+          }
+          return true;
+        });
+      }
+
+      // Halves
+      halves = halves.filter(h => {
+        const alive = h.update(spdScale);
+        if (alive) h.draw(ctx);
+        return alive;
+      });
+
+      // Particles
+      particles = particles.filter(p => {
+        const alive = p.update();
+        if (alive) p.draw(ctx);
+        return alive;
+      });
+
+      // Draw Dual-Blade Trails
+      blades.forEach((b, bIdx) => {
+        if (b.trail.length > 1) {
+          for (let i = 1; i < b.trail.length; i++) {
+            const p1 = b.trail[i - 1];
+            const p2 = b.trail[i];
+            const pct = i / b.trail.length;
+
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+
+            // Skin color styling
+            if (selectedBladeSkin === 'fire') {
+              ctx.strokeStyle = `rgba(255, ${Math.floor(100 * pct)}, 0, 0.9)`;
+              ctx.lineWidth = 18 * pct;
+            } else if (selectedBladeSkin === 'rainbow') {
+              const hue = (now / 4 + i * 15) % 360;
+              ctx.strokeStyle = `hsla(${hue}, 100%, 55%, 0.9)`;
+              ctx.lineWidth = 16 * pct;
+            } else if (selectedBladeSkin === 'frost') {
+              ctx.strokeStyle = 'rgba(0, 229, 255, 0.9)';
+              ctx.lineWidth = 16 * pct;
+            } else {
+              // Cyan
+              ctx.strokeStyle = '#00e5ff';
+              ctx.lineWidth = 14 * pct;
+            }
+            ctx.lineCap = 'round';
+            ctx.stroke();
+
+            // Core Katana edge
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 5 * pct;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+          }
+        }
+
+        // Finger Tip Sparkle
+        if (b.prev) {
+          ctx.beginPath();
+          ctx.arc(b.prev.x, b.prev.y, 9, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+          ctx.strokeStyle = selectedBladeSkin === 'fire' ? '#ff3d00' : '#00e5ff';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+      });
+
+      // Floating Texts (Combos, Critical, Power-ups)
+      floatingTexts = floatingTexts.filter(t => {
+        t.timer--;
+        t.y -= 1.2;
+        ctx.save();
+        ctx.font = 'bold 32px sans-serif';
+        ctx.fillStyle = t.color;
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 4;
+        ctx.strokeText(t.text, t.x - 60, t.y);
+        ctx.fillText(t.text, t.x - 60, t.y);
+        ctx.restore();
+        return t.timer > 0;
+      });
+
+      drawHUD();
+      requestAnimationFrame(render);
+    }
+
+    function drawHUD() {
+      if (gameState === 'START') {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(W/2 - 340, 80, 680, 160);
+        ctx.font = 'bold 44px sans-serif';
+        ctx.fillStyle = '#ff9800';
+        ctx.fillText('FRUIT NINJA CV', W/2 - 180, 145);
+        ctx.font = '19px sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText('Point your index finger(s) at the camera & slice the fruit!', W/2 - 275, 195);
+
+        ctx.save();
+        ctx.translate(startFruit.x, startFruit.y);
+        ctx.beginPath();
+        ctx.arc(0, 0, startFruit.r, 0, Math.PI * 2);
+        ctx.fillStyle = '#2e7d32';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(0, 0, startFruit.r * 0.85, 0, Math.PI * 2);
+        ctx.fillStyle = '#d32f2f';
+        ctx.fill();
+        ctx.restore();
+
+        ctx.font = 'bold 22px sans-serif';
+        ctx.fillStyle = '#76ff03';
+        ctx.fillText('SLICE TO PLAY!', startFruit.x - 75, startFruit.y + 80);
+
+      } else if (gameState === 'PLAYING') {
+        // Score Badge
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+        ctx.fillRect(25, 20, 210, 75);
+        ctx.strokeStyle = '#ff9800';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(25, 20, 210, 75);
+
+        ctx.font = 'bold 30px sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(`SCORE: ${score}`, 40, 65);
+
+        // High Score
+        const currHigh = gameMode === 'CLASSIC' ? highScoreClassic : highScoreArcade;
+        ctx.font = '15px sans-serif';
+        ctx.fillStyle = '#ffb74d';
+        ctx.fillText(`BEST: ${currHigh}`, 40, 85);
+
+        // Classic Lives OR Arcade Timer
+        if (gameMode === 'CLASSIC') {
+          for (let i = 0; i < 3; i++) {
+            ctx.font = '32px sans-serif';
+            ctx.fillStyle = i < lives ? '#f44336' : '#555';
+            ctx.fillText(i < lives ? '❤' : '✖', W - 140 + i * 40, 55);
+          }
+        } else {
+          // Arcade Timer Badge
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+          ctx.fillRect(W - 170, 20, 140, 60);
+          ctx.strokeStyle = arcadeTimeLeft <= 10 ? '#ff1744' : '#00e5ff';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(W - 170, 20, 140, 60);
+
+          ctx.font = 'bold 26px sans-serif';
+          ctx.fillStyle = arcadeTimeLeft <= 10 ? '#ff1744' : '#00e5ff';
+          ctx.fillText(`⏱️ ${arcadeTimeLeft}s`, W - 150, 60);
+        }
+
+      } else if (gameState === 'GAMEOVER') {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.fillRect(W/2 - 280, 90, 560, 240);
+        ctx.font = 'bold 46px sans-serif';
+        ctx.fillStyle = '#f44336';
+        ctx.fillText('GAME OVER', W/2 - 150, 155);
+        ctx.font = '24px sans-serif';
+        ctx.fillStyle = '#ffffff';
+        const best = gameMode === 'CLASSIC' ? highScoreClassic : highScoreArcade;
+        ctx.fillText(`Score: ${score}   |   Best (${gameMode}): ${best}`, W/2 - 170, 210);
+
+        // Restart fruit
+        ctx.save();
+        ctx.translate(startFruit.x, startFruit.y + 60);
+        ctx.beginPath();
+        ctx.arc(0, 0, startFruit.r, 0, Math.PI * 2);
+        ctx.fillStyle = '#2e7d32';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(0, 0, startFruit.r * 0.85, 0, Math.PI * 2);
+        ctx.fillStyle = '#d32f2f';
+        ctx.fill();
+        ctx.restore();
+
+        ctx.font = 'bold 22px sans-serif';
+        ctx.fillStyle = '#76ff03';
+        ctx.fillText('SLICE TO RESTART!', startFruit.x - 105, startFruit.y + 140);
+      }
+    }
+
+    // Initialize Camera Feed
+    setupCamera();
+    requestAnimationFrame(render);
+  </script>
+</body>
+</html>
